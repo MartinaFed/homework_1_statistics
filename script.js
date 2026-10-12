@@ -1,72 +1,228 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Elliptic Curves</title>
-    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    <div class="main-card">
-        <h1 class="autumn-title">Elliptic Curve Explorer</h1>
-        <p class="subtitle">Interactive visualization for toy curve: <code>y² = x³ + 7 (mod 17)</code></p>
+// ==========================================
+// CONFIGURAZIONE DELLA CURVA GIOCATTOLO
+// ==========================================
+
+const primeField = 17;
+let activeBaseNode = { x: 1, y: 5 }; 
+let haltExecution = false;
+
+// Colori autunnali per il canvas
+const COL_BASE_DOT = '#d7ccc8';
+const COL_GEN_NODE = '#e65100';
+const COL_JUMP_PATH = '#c0392b';
+const COL_FINAL_KEY = '#558b2f';
+
+// ==========================================
+// MATEMATICA DEL CAMPO FINITO
+// ==========================================
+
+function safeModulo(val, modulus) { 
+    return ((val % modulus) + modulus) % modulus; 
+}
+
+function findModularInverse(val, modulus) {
+    val = safeModulo(val, modulus);
+    for (let iterator = 1; iterator < modulus; iterator++) {
+        if (safeModulo(val * iterator, modulus) === 1) return iterator;
+    }
+    return 1;
+}
+
+function computeCurveDomain() {
+    let validNodes = [];
+    for (let absX = 0; absX < primeField; absX++) {
+        let rightEq = safeModulo(absX * absX * absX + 7, primeField);
+        for (let absY = 0; absY < primeField; absY++) {
+            let leftEq = safeModulo(absY * absY, primeField);
+            if (leftEq === rightEq) { 
+                validNodes.push({x: absX, y: absY}); 
+            }
+        }
+    }
+    return validNodes;
+}
+
+const domainPoints = computeCurveDomain();
+
+window.onload = function() {
+    const dropdown = document.getElementById('generatorSelect');
+    domainPoints.forEach(node => {
+        let opt = document.createElement('option');
+        opt.value = `${node.x},${node.y}`;
+        opt.text = `(${node.x}, ${node.y})`;
+        if(node.x === 1 && node.y === 5) opt.selected = true;
+        dropdown.appendChild(opt);
+    });
+    renderCoordinateSystem();
+    plotCoordinate(activeBaseNode, COL_GEN_NODE, 8);
+};
+
+// ==========================================
+// LOGICA DELLA CURVA ELLITTICA
+// ==========================================
+
+function addEllipticPoints(nodeA, nodeB) {
+    if (nodeA === null) return { resultant: nodeB, logs: "Identity addition (Infinity)." };
+    if (nodeB === null) return { resultant: nodeA, logs: "Identity addition (Infinity)." };
+
+    if (nodeA.x === nodeB.x && nodeA.y === safeModulo(-nodeB.y, primeField)) {
+        return { resultant: null, logs: "Points are inverses. Result is Infinity (O)." };
+    }
+
+    let lambdaSlope, logsData;
+    
+    if (nodeA.x === nodeB.x && nodeA.y === nodeB.y) {
+        let numerator = safeModulo(3 * nodeA.x * nodeA.x, primeField);
+        let denominator = findModularInverse(2 * nodeA.y, primeField);
+        lambdaSlope = safeModulo(numerator * denominator, primeField);
+        logsData = `Point Doubling operation.\n   Tangent λ = (3x²)/2y mod ${primeField} = ${lambdaSlope}`;
+    } else {
+        let numerator = safeModulo(nodeB.y - nodeA.y, primeField);
+        let denominator = findModularInverse(nodeB.x - nodeA.x, primeField);
+        lambdaSlope = safeModulo(numerator * denominator, primeField);
+        logsData = `Point Addition operation.\n   Line λ = (y₂-y₁)/(x₂-x₁) mod ${primeField} = ${lambdaSlope}`;
+    }
+
+    let xRes = safeModulo(lambdaSlope * lambdaSlope - nodeA.x - nodeB.x, primeField);
+    let yRes = safeModulo(lambdaSlope * (nodeA.x - xRes) - nodeA.y, primeField);
+    
+    return { resultant: { x: xRes, y: yRes }, logs: logsData + `\n   Yield: x₃ = ${xRes}, y₃ = ${yRes}` };
+}
+
+function compileScalarSequence(scalarMultiplier) {
+    let sequenceArray = [];
+    let traversingNode = activeBaseNode;
+    sequenceArray.push({ mult: 1, coord: traversingNode, info: "Base Generator Node established." });
+    
+    for(let iter = 2; iter <= scalarMultiplier; iter++) {
+        let calcResult = addEllipticPoints(traversingNode, activeBaseNode);
+        traversingNode = calcResult.resultant;
+        sequenceArray.push({ mult: iter, coord: traversingNode, info: calcResult.logs });
+    }
+    return sequenceArray;
+}
+
+// ==========================================
+// RENDER DEL CANVAS (Grafica Animata)
+// ==========================================
+
+const cryptoCanvas = document.getElementById('cryptoCanvas');
+const renderCtx = cryptoCanvas.getContext('2d');
+const gridScale = cryptoCanvas.width / primeField;
+
+function renderCoordinateSystem() {
+    renderCtx.clearRect(0, 0, cryptoCanvas.width, cryptoCanvas.height);
+    renderCtx.strokeStyle = '#f0e6dc';
+    renderCtx.lineWidth = 1.5;
+    
+    for (let idx = 0; idx <= primeField; idx++) {
+        renderCtx.beginPath(); renderCtx.moveTo(idx * gridScale, 0); renderCtx.lineTo(idx * gridScale, cryptoCanvas.height); renderCtx.stroke();
+        renderCtx.beginPath(); renderCtx.moveTo(0, idx * gridScale); renderCtx.lineTo(cryptoCanvas.width, idx * gridScale); renderCtx.stroke();
+    }
+    
+    renderCtx.fillStyle = COL_BASE_DOT;
+    domainPoints.forEach(node => plotCoordinate(node, COL_BASE_DOT, 4));
+}
+
+function plotCoordinate(nodeObj, hexColor, radSize = 5) {
+    if (!nodeObj) return; 
+    const mappedX = nodeObj.x * gridScale + gridScale/2;
+    const mappedY = cryptoCanvas.height - (nodeObj.y * gridScale + gridScale/2);
+    
+    renderCtx.beginPath();
+    renderCtx.arc(mappedX, mappedY, radSize, 0, 2 * Math.PI);
+    renderCtx.fillStyle = hexColor;
+    renderCtx.fill();
+}
+
+function connectVertices(node1, node2, hexColor) {
+    if (!node1 || !node2) return;
+    const mx1 = node1.x * gridScale + gridScale/2;
+    const my1 = cryptoCanvas.height - (node1.y * gridScale + gridScale/2);
+    const mx2 = node2.x * gridScale + gridScale/2;
+    const my2 = cryptoCanvas.height - (node2.y * gridScale + gridScale/2);
+    
+    renderCtx.beginPath();
+    renderCtx.moveTo(mx1, my1);
+    renderCtx.lineTo(mx2, my2);
+    renderCtx.strokeStyle = hexColor;
+    renderCtx.lineWidth = 2.5;
+    renderCtx.setLineDash([5, 7]);
+    renderCtx.stroke();
+    renderCtx.setLineDash([]);
+}
+
+// ==========================================
+// GESTIONE DEI PULSANTI
+// ==========================================
+
+function refreshStartNode() {
+    if (haltExecution || document.getElementById('outputTerminal').innerHTML.includes("System online")) {
+        let dropdownVals = document.getElementById('generatorSelect').value.split(',');
+        activeBaseNode = { x: parseInt(dropdownVals[0]), y: parseInt(dropdownVals[1]) };
+        renderCoordinateSystem();
+        plotCoordinate(activeBaseNode, COL_GEN_NODE, 8);
+    }
+}
+
+function abortCalculation() { 
+    haltExecution = true; 
+}
+
+function clearCryptoState() {
+    haltExecution = true;
+    document.getElementById('outputTerminal').innerHTML = "> System reset.\n> Select parameters and Compute.";
+    let dropdownVals = document.getElementById('generatorSelect').value.split(',');
+    activeBaseNode = { x: parseInt(dropdownVals[0]), y: parseInt(dropdownVals[1]) };
+    renderCoordinateSystem();
+    plotCoordinate(activeBaseNode, COL_GEN_NODE, 8);
+}
+
+async function launchCryptoSequence() {
+    haltExecution = false;
+    
+    let dropdownVals = document.getElementById('generatorSelect').value.split(',');
+    activeBaseNode = { x: parseInt(dropdownVals[0]), y: parseInt(dropdownVals[1]) };
+
+    let secretKeyVal = parseInt(document.getElementById('secretScalar').value);
+    if(isNaN(secretKeyVal) || secretKeyVal < 1) secretKeyVal = 1;
+    
+    const terminalScreen = document.getElementById('outputTerminal');
+    terminalScreen.innerHTML = `<span style="color:var(--fall-gold);"># Parameters Loaded</span>\nCurve Modulus: ${primeField}\nGen Pt = (${activeBaseNode.x}, ${activeBaseNode.y})\nMultiplier k = ${secretKeyVal}\n\n<span style="color:var(--fall-orange);">> Initiating multiplication logic...</span>\n\n`;
+    
+    renderCoordinateSystem();
+    plotCoordinate(activeBaseNode, COL_GEN_NODE, 8);
+
+    let computationalSteps = compileScalarSequence(secretKeyVal);
+    let historyNode = null;
+
+    for (let st = 0; st < computationalSteps.length; st++) {
+        if (haltExecution) {
+            terminalScreen.innerHTML += `<strong style="color:var(--fall-red);">\n[PROCESS HALTED BY USER]</strong>\n`;
+            terminalScreen.scrollTop = terminalScreen.scrollHeight;
+            break;
+        }
+
+        let currentPhase = computationalSteps[st];
+        let formattedPt = currentPhase.coord ? `(${currentPhase.coord.x}, ${currentPhase.coord.y})` : 'O (Infinity)';
         
-        <div class="dashboard-bar">
-            <div class="input-group">
-                <label for="generatorSelect">Generator (G):</label>
-                <select id="generatorSelect" onchange="refreshStartNode()"></select>
-            </div>
-            <div class="input-group">
-                <label for="secretScalar">Scalar (k):</label>
-                <input type="number" id="secretScalar" value="6" min="1" max="50" style="width: 80px;">
-            </div>
-            <div class="input-group" style="margin-left: 10px;">
-                <label for="tempoSlider">Speed:</label>
-                <input type="range" id="tempoSlider" min="50" max="1500" value="600" step="50" dir="rtl">
-            </div>
-            <button onclick="launchCryptoSequence()">Compute kG</button>
-            <button class="action-stop" onclick="abortCalculation()">Stop</button>
-            <button class="action-reset" onclick="clearCryptoState()">Reset</button>
-        </div>
+        terminalScreen.innerHTML += `<strong style="color:#ffffff;">[Step ${currentPhase.mult}] ${currentPhase.mult}G = ${formattedPt}</strong>\n<span class="calc-note">↳ ${currentPhase.info.replace(/\n/g, '<br>↳ ')}</span>\n\n`;
+        terminalScreen.scrollTop = terminalScreen.scrollHeight;
 
-        <div class="split-view">
-            <div class="visual-area">
-                <canvas id="cryptoCanvas" width="400" height="400"></canvas>
-                <div class="map-legend">
-                    <span><i class="marker" style="background: #d7ccc8;"></i> Valid Points</span>
-                    <span><i class="marker" style="background: #e65100;"></i> Start (G)</span>
-                    <span><i class="marker" style="background: #c0392b;"></i> Path Jumps</span>
-                    <span><i class="marker" style="background: #558b2f;"></i> Public Key</span>
-                </div>
-            </div>
+        if (st > 0) { 
+            connectVertices(historyNode, currentPhase.coord, 'rgba(192, 57, 43, 0.4)'); 
+        }
+        
+        if (st === computationalSteps.length - 1) {
+            plotCoordinate(currentPhase.coord, COL_FINAL_KEY, 10);
+            terminalScreen.innerHTML += `<span style="color:${COL_FINAL_KEY}; font-weight:bold; font-size:1.1em;">=== GENERATED PUBLIC KEY (Q) ===\nQ = ${formattedPt}</span>\n`;
+        } else if (st !== 0) {
+            plotCoordinate(currentPhase.coord, COL_JUMP_PATH, 6);
+        }
 
-            <div class="terminal-wrapper">
-                <div class="terminal" id="outputTerminal">> System online.
-> Select parameters and press Compute to observe point addition.</div>
-            </div>
-        </div>
-
-        <div class="theory-section">
-            <h3 class="theory-title">🍁 Analytical Observations</h3>
-            <p style="text-align: center; color: var(--text-light); max-width: 800px; margin: 0 auto 30px auto;">
-                Observing the computation above reveals the unique geometric behaviors that make elliptic curve cryptography secure.
-            </p>
-            
-            <div class="leaf-grid">
-                <div class="leaf-card">
-                    <h4>The Avalanche Effect</h4>
-                    <p>Notice how adding a point to itself over a finite field causes extreme, unpredictable jumps across the canvas.</p>
-                    <p>The jump from step <em>k</em> to <em>k+1</em> has no obvious geometric relationship. This deterministic scattering guarantees that finding the multiplier <em>k</em> from the final point is mathematically infeasible.</p>
-                </div>
-                <div class="leaf-card">
-                    <h4>Hashing vs. Curves</h4>
-                    <p><strong>Hash Functions:</strong> Act like a digital shredder. They destroy the input's structure completely to create a one-way, fixed-size output.</p>
-                    <p><strong>Elliptic Curves:</strong> Act like an intricate, invisible maze. The output looks random, but secretly retains an elegant algebraic symmetry.</p>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script src="script.js"></script>
-</body>
-</html>
+        historyNode = currentPhase.coord;
+        
+        let dynamicDelay = parseInt(document.getElementById('tempoSlider').value);
+        await new Promise(resolve => setTimeout(resolve, dynamicDelay));
+    }
+}
